@@ -165,3 +165,12 @@ class CourseCatalogServiceMockMixin(object):
                 httpretty.Response(body=callback, content_type='application/json', status_code=500)
             ]
         )
+
+    def mock_catalog_program_list(self):
+        api = '{}programs/'.format(
+            settings.COURSE_CATALOG_API_URL,
+        )
+        httpretty.register_uri(
+            method=httpretty.GET,
+            uri=api
+        )
