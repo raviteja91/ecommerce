@@ -1,7 +1,10 @@
 from __future__ import unicode_literals
 
 import hashlib
+import json
+import logging
 
+from dateutil.parser import parse
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
@@ -9,10 +12,14 @@ from oscar.core.loading import get_model
 from rest_framework import status, viewsets
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
+from requests.exceptions import ConnectionError, Timeout
+from slumber.exceptions import SlumberBaseException
 
 from ecommerce.courses.models import Course
-from ecommerce.extensions.api.serializers import ConditionalOfferSerialitzer
+from ecommerce.extensions.api.serializers import ConditionalOfferSerializer
 from ecommerce.extensions.catalogue.models import Catalog
+
+log = logging.getLogger(__name__)
 
 ConditionalOffer = get_model('offer', 'ConditionalOffer')
 Condition = get_model('offer', 'Condition')
@@ -25,17 +32,18 @@ StockRecord = get_model('partner', 'StockRecord')
 class OfferViewSet(viewsets.ModelViewSet):
     permission_classes = (IsAuthenticated, IsAdminUser)
     queryset = ConditionalOffer.objects.filter(offer_type=ConditionalOffer.SITE)
-    serializer_class = ConditionalOfferSerialitzer
+    serializer_class = ConditionalOfferSerializer
 
     def create(self, request, *args, **kwargs):
         with transaction.atomic():
             program_uuid = request.data['program_uuid']
-            program = self.get_program(program_uuid)
+            program = self.get_program(self.request, program_uuid)
             _range = self.create_range(program)
             benefit = Benefit.objects.create(
                 range=_range,
+
                 type=Benefit.PERCENTAGE,
-                value=request.data['benefit_value']
+                value=int(request.data['benefit_value'])
             )
             condition = Condition.objects.create(
                 range=_range,
@@ -48,21 +56,26 @@ class OfferViewSet(viewsets.ModelViewSet):
                 offer_type=ConditionalOffer.SITE,
                 benefit=benefit,
                 condition=condition,
-                start_datetime=request.data['start_datetime'],
-                end_datetime=request.data['end_datetime']
+                start_datetime=parse(request.data['start_datetime']),
+                end_datetime=parse(request.data['end_datetime'])
             )
 
-            return Response(self.serializer_class(offer).data, status=status.HTTP_201)
+            return Response(self.serializer_class(offer).data, status=status.HTTP_201_CREATED)
 
-    def get_program(self, program_uuid):
+    def get_program(self, request, program_uuid):
+        """Retreives the program data from the Catalog Service."""
         cache_key = hashlib.md5(
             'program_{uuid}'.format(uuid=program_uuid)
         ).hexdigest()
         program = cache.get(cache_key)
         if not program:
-            api = self.request.site.siteconfiguration.course_catalog_api_client
-            program = api.programs(program_uuid).get()
-            cache.set(cache_key, program, settings.PROGRAM_CACHE_TIMEOUT)
+            try:
+                api = request.site.siteconfiguration.course_catalog_api_client
+                program = json.loads(api.programs(program_uuid).get())
+                cache.set(cache_key, program, settings.PROGRAM_CACHE_TIMEOUT)
+            except (ConnectionError, SlumberBaseException, Timeout):
+                log.warning('Unable to retrieve program [%s] from Course Catalog.', program_uuid)
+                raise
         return program
 
     def create_range(self, program):
@@ -89,3 +102,34 @@ class OfferViewSet(viewsets.ModelViewSet):
             name=name,
             catalog=catalog
         )
+
+    def partial_update(self, request, *args, **kwargs):
+        """
+        Handler for the PATCH HTTP method.
+        Partially updates the offer depending on request data sent.
+        """
+        offer = self.get_object()
+
+        program_uuid = request.data.get('program_uuid')
+        if program_uuid:
+            program = self.get_program(self.request, program_uuid)
+            _range = self.create_range(program)
+            offer.benefit.range = _range
+            offer.condition.range = _range
+
+        benefit_value = request.data.get('benefit_value')
+        if benefit_value:
+            offer.benefit.value = benefit_value
+            offer.benefit.save()
+
+        start_datetime = request.data.get('start_datetime')
+        if start_datetime:
+            offer.start_datetime = start_datetime
+            offer.save()
+
+        end_datetime = request.data.get('end_datetime')
+        if end_datetime:
+            offer.end_datetime = end_datetime
+            offer.save()
+
+        return Response(self.serializer_class(offer).data, status=status.HTTP_200_OK)

@@ -720,6 +720,6 @@ class ProviderSerializer(serializers.Serializer):  # pylint: disable=abstract-me
     url = serializers.CharField()
 
 
-class ConditionalOfferSerialitzer(serializers.ModelSerializer):
+class ConditionalOfferSerializer(serializers.ModelSerializer):
     class Meta(object):
         model = ConditionalOffer

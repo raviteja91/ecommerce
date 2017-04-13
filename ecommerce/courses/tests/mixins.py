@@ -166,11 +166,22 @@ class CourseCatalogServiceMockMixin(object):
             ]
         )
 
-    def mock_catalog_program_list(self):
-        api = '{}programs/'.format(
+    def mock_catalog_program_list(self, uuid, course_key):
+        api = '{}programs/{}/'.format(
             settings.COURSE_CATALOG_API_URL,
+            uuid
         )
+        data = {
+            'title': 'Test Program',
+            'applicable_seat_types': ['verified'],
+            'courses': [{
+                'course_runs': [{
+                    'key': course_key
+                }]
+            }]
+        }
         httpretty.register_uri(
             method=httpretty.GET,
-            uri=api
+            uri=api,
+            body=json.dumps(data)
         )
